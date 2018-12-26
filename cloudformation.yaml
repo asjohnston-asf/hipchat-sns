@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+
+  HipchatEndpoint:
+    Type: String
+
+  AuthToken:
+    Type: String
+    NoEcho: true
+
+  TopicArn:
+    Type: String
+
+Resources:
+
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${AWS::StackName}-dlq"
+      MessageRetentionPeriod: 1209600
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}"
+      RetentionInDays: 30
+
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref AWS::StackName
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          Action: sts:AssumeRole
+          Principal:
+            Service: lambda.amazonaws.com
+          Effect: Allow
+      Policies:
+      - PolicyName: policy
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: !GetAtt LogGroup.Arn
+          - Effect: Allow
+            Action: sqs:SendMessage
+            Resource: !GetAtt DeadLetterQueue.Arn
+
+  Lambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref AWS::StackName
+      Code: src/
+      DeadLetterConfig:
+        TargetArn: !GetAtt DeadLetterQueue.Arn
+      Environment:
+        Variables:
+          AUTH_TOKEN: !Ref AuthToken
+          HIPCHAT_ENDPOINT: !Ref HipchatEndpoint
+      Handler: main.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt Role.Arn
+      Runtime: python2.7
+      Timeout: 60
+
+  EventPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt Lambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref TopicArn
+
+  Subscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref TopicArn
+      Protocol: lambda
+      Endpoint: !GetAtt Lambda.Arn
